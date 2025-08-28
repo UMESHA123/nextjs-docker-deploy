@@ -35,6 +35,7 @@ Test locally:
 ## 📦 2. Dockerize Next.js
 
 # Stage 1: Build the Next.js app
+```bash
 FROM --platform=linux/amd64 node:18-alpine AS builder
 
 WORKDIR /app
@@ -57,7 +58,7 @@ COPY --from=builder /app/public ./public
 
 EXPOSE 3000
 CMD ["npm", "start"]
-
+```
 
 ```bash
 docker build -t my-next-app .
