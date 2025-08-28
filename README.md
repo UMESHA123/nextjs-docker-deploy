@@ -1,36 +1,174 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
-## Getting Started
+# 🚀 Deploy Next.js App on AWS ECS with Docker and ALB
 
-First, run the development server:
+This guide explains how to **containerize a Next.js app**, push it to **ECR**, and deploy it to **ECS Fargate** with an **Application Load Balancer (ALB)**.
+
+---
+
+## 📌 Prerequisites
+
+* AWS Account
+* IAM user with `ECS`, `ECR`, `EC2`, `IAM` permissions
+* AWS CLI installed and configured:
+
+  ```bash
+  aws configure
+  ```
+* Docker installed
+* GitHub repo for documentation
+
+---
+
+## 🛠️ 1. Create a Simple Next.js App
 
 ```bash
+npx create-next-app myapp
+cd myapp
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Test locally:
+👉 Open `http://localhost:3000`
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 📦 2. Dockerize Next.js
 
-## Learn More
+# Stage 1: Build the Next.js app
+FROM --platform=linux/amd64 node:18-alpine AS builder
 
-To learn more about Next.js, take a look at the following resources:
+WORKDIR /app
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+COPY package*.json ./
+RUN npm install
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+COPY . .
+RUN npm run build
 
-## Deploy on Vercel
+# Stage 2: Run the production build
+FROM --platform=linux/amd64 node:18-alpine AS runner
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+WORKDIR /app
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+
+EXPOSE 3000
+CMD ["npm", "start"]
+
+
+```bash
+docker build -t my-next-app .
+docker run -p 3000:3000 my-next-app
+```
+
+👉 Visit `http://localhost:3000`
+
+---
+
+## 🐳 3. Push Image to Amazon ECR
+
+1. Create an ECR repo:
+
+   ```bash
+   aws ecr create-repository --repository-name my-next-app
+   ```
+
+2. Authenticate Docker with ECR:
+
+   ```bash
+   aws ecr get-login-password --region <your-region> | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<your-region>.amazonaws.com
+   ```
+
+3. Tag and push image:
+
+   ```bash
+   docker tag my-next-app:latest <account-id>.dkr.ecr.<your-region>.amazonaws.com/my-next-app:latest
+   docker push <account-id>.dkr.ecr.<your-region>.amazonaws.com/my-next-app:latest
+   ```
+
+---
+
+## ☁️ 4. Setup ECS Fargate Service
+
+1. Go to **ECS Console → Create Cluster → Networking only (Fargate)**.
+2. Create a **Task Definition**:
+
+   * Launch type: **Fargate**
+   * Add container:
+
+     * Image: `<ECR repo URL>:latest`
+     * Port mappings: `3000`
+3. Create a **Service**:
+
+   * Launch type: **Fargate**
+   * Desired tasks: `1`
+   * Attach **Application Load Balancer (ALB)**
+
+---
+
+## 🌐 5. Configure Application Load Balancer
+
+* Create **Target Group**:
+
+  * Target type: IP
+  * Protocol: HTTP
+  * Port: `3000`
+  * Health check path: `/`
+* Attach target group to **ECS service**
+* Allow inbound rules in **ALB Security Group**:
+
+  * HTTP `80` → `0.0.0.0/0`
+  * (Optional) HTTPS `443`
+
+---
+
+## 🔑 6. IAM Permissions
+
+ECS task needs an IAM role with:
+
+* `AmazonECSTaskExecutionRolePolicy`
+* `AmazonEC2ContainerRegistryReadOnly`
+
+Attach role in **Task Execution Role**.
+
+---
+
+## 🌍 7. Access the App
+
+1. Go to **EC2 → Load Balancers**.
+2. Copy **DNS Name** of ALB:
+
+   ```
+   my-alb-1234567890.ap-south-1.elb.amazonaws.com
+   ```
+3. Open in browser → 🎉 Your Next.js app is live!
+
+---
+
+## ⚡ 8. Optional: Custom Domain (Route 53)
+
+1. Create an **A Record** in Route 53:
+
+   * Type: `Alias`
+   * Target: ALB DNS
+2. Access app at `https://yourdomain.com`
+
+---
+
+## 🛠️ 9. Common Issues
+
+* **Health check failing** → make sure container listens on `0.0.0.0:3000`
+* **CannotPullContainerError** → check platform in Docker build:
+
+  ```bash
+  docker buildx build --platform=linux/amd64 -t my-next-app .
+  ```
+* **Auth error with ECR** → ensure `AmazonEC2ContainerRegistryReadOnly` is attached
+
+---
+
+✅ That’s it! Your Next.js app is fully deployed on ECS with Docker + ALB.
+
